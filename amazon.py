@@ -1,7 +1,6 @@
 import requests
 from lxml import html
 import time
-import logging
 
 
 def parse_amazon(url, header):
@@ -20,7 +19,7 @@ def get_base_and_shipping_costs(sellers):
     base_xpath = ".//span[contains(@class, 'olpOfferPrice')]/text()"
 
     # The ship_xpath is split into two parts: It picks up data containing the shipping price (under the class
-    # 'olpShippingPrice') and picks up data where there free shipping (which contains the text 'FREE Shipping').
+    # 'olpShippingPrice') and picks up data where there is free shipping (which contains the text 'FREE Shipping').
     ship_xpath = ".//p[contains(@class, 'olpShippingInfo')]//span[contains(@class, 'olpShippingPrice')][1]//text() |"\
                  " //span[contains(@class, 'a-color-secondary')]//*[contains(., 'FREE Shipping')]//text()"
 
@@ -78,7 +77,6 @@ def get_search_results(keyword, header):
         print("Sorry, we didn't find any results for that.")
         return None, None, None
 
-    print(len(results))
     result_names = []
     result_prices = []
     result_links = []
@@ -86,28 +84,97 @@ def get_search_results(keyword, header):
         data = result_data.xpath(result_xpath)
         if data:
             result_names.append(data[0])
-        data = result_data.xpath(price_xpath)
-        if data:
-            result_prices.append(data[0])
-        data = result_data.xpath(link_xpath)
-        if data:
-            result_links.append(data[0])
-    print(len(result_names), len(result_prices), len(result_links))
-    print(result_prices)
+            result_prices.append(result_data.xpath(price_xpath)[0])
+            result_links.append(result_data.xpath(link_xpath)[0])
     return result_names, result_prices, result_links
+
+
+def get_user_search_query(header):
+    search_parameter = input("Please enter the name of the item you want to search for. ")
+    names, prices, links = get_search_results(search_parameter, headers=header)
+    return names, prices, links
+
+
+def print_search_results(names, prices, links):
+    for num, (item, val, link) in enumerate(zip(names, prices, links)):
+        print(f"{num+1:>2d}. ({val}) {item if len(item) < 50 else item[:50] + '...'}")
+
+
+def get_user_search_selection(names):
+    while True:
+        search_choice = input("Type in the number of the item you want to track, or else type 'q' to search for "
+                              "another item.")
+        try:
+            search_choice = int(search_choice)
+            if not 0 < search_choice <= len(names):
+                print(f"That is not a valid input. Please ensure the chosen number is between 1 and {len(names)}.")
+            else:
+                break
+        except ValueError:
+            if search_choice.lower() == "q":
+                break
+            print("That is not a valid input. Please type a number from the available choices, or else 'q' to quit.")
+        time.sleep(2)
+    return search_choice
+
+
+def get(header):
+    while True:
+        names, prices, links = get_user_search_query(header)
+        if not names:
+            continue
+        print_search_results(names, prices, links)
+        selection = get_user_search_selection(names)
+        if selection == "q":
+            continue
+        desired_name = names[selection - 1]
+        desired_link = links[selection - 1]
+        notification_price = get_notification_price(desired_name)
+        add_element_to_track_file(desired_name, desired_link, notification_price)
+
+
+def get_notification_price(name):
+    while True:
+        try:
+            notification_price = float(input(f'What is the maximum price you want to track for "{name}"?'))
+            while True:
+                confirm = input(f'So shall we send you notifications when "{name}" is available for less than '
+                                f'{notification_price}?\n'
+                                f"(Input 'yes' or 'no')")
+                if confirm.lower() in ['yes', 'y']:
+                    return str(notification_price)
+                elif confirm.lower() in ['no', 'n']:
+                    return ""
+                print("That is not a valid response.")
+                time.sleep(2)
+        except ValueError:
+            print("Please type your answer in the form of a number. Do not include any currency symbols or "
+                  "abbreviations.")
+            time.sleep(2)
+
+
+def add_element_to_track_file(name, link, price):
+    try:
+        with open("amazon_tracked_items.txt", "a+") as f:
+            f.write(f"{name}")
+            f.write(f"{link}")
+            f.write(f"{price}")
+    except FileExistsError:
+        print("An error occurred: amazon_tracked_items.txt could not be created.")
 
 
 if __name__ == "__main__":
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:47.0) Gecko/20100101 Firefox/47.0'}
 
     while True:
-        search_parameter = input("Please enter the name of the item you want to search for. ")
-        names, prices, links = get_search_results(search_parameter, headers)
-        if names:
-            break
-    for num, (item, val, link) in enumerate(zip(names, prices, links)):
-        print(f"{num+1:02d}. ({val}) {item if len(item) < 50 else item[:50] + '...'}")
-    input()
+        get_user_search_query()
+        # if names:
+
+    # for num, (item, val, link) in enumerate(zip(names, prices, links)):
+    #     print(f"{num+1:>2d}. ({val}) {item if len(item) < 50 else item[:50] + '...'}")
+    # search_choice = input("Type in the number of the item you want to track, or else type 'q' to search for another "
+    #                       "item.")
+    # input()
 
 #     # url = 'https://www.amazon.ca/gp/offer-listing/B01MUAGZ49'
 #     url_1 = 'https://www.amazon.ca/gp/offer-listing/B01MUAGZ49/ref=olp_f_usedVeryGood&f_new=true&f_collectible=true&' \
