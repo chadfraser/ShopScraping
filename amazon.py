@@ -1,7 +1,7 @@
 import requests
 from lxml import html
 import time
-import traceback
+import re
 
 
 def print_then_sleep(message):
@@ -94,7 +94,8 @@ def get_search_results(keyword, headers):
         if data:
             result_names.append(data[0])
             result_prices.append(price_data[0])
-            result_links.append(link_data[0])
+            offer_link = get_offer_listing_url(link_data[0])
+            result_links.append(offer_link)
     return result_names, result_prices, result_links
 
 
@@ -104,8 +105,8 @@ def get_user_search_query(headers):
     return names, prices, links
 
 
-def print_search_results(names, prices, links):
-    for num, (item, val, link) in enumerate(zip(names, prices, links)):
+def print_search_results(names, prices):
+    for num, (item, val) in enumerate(zip(names, prices)):
         print(f"{num+1:>2d}. ({val}) {item if len(item) < 50 else item[:50] + '...'}")
     print()
 
@@ -118,32 +119,32 @@ def get_user_search_selection(names):
             search_choice = int(search_choice)
             if not 0 < search_choice <= len(names):
                 print_then_sleep(f"That is not a valid input. Please ensure the chosen number is between 1 and "
-                                 f"{len(names)}\n.")
+                                 f"{len(names)}.\n")
             else:
                 break
         except ValueError:
             if search_choice.lower() == "q":
-                search_choice = 0
                 break
             print_then_sleep("That is not a valid input. Please type a number from the available choices, or else "
                              "'q' to quit.\n")
     return search_choice
 
 
-def get(headers):
+def main(headers):
     while True:
         names, prices, links = get_user_search_query(headers)
         if not names:
             continue
-        print_search_results(names, prices, links)
+        print_search_results(names, prices)
         selection = get_user_search_selection(names)
-        if selection == 0:
+        if selection == "q":
             continue
         desired_name = names[selection - 1]
         desired_link = links[selection - 1]
         notification_price = get_notification_price(desired_name)
+        desired_link = get_quality_to_track(desired_link)
         if notification_price:
-            add_element_to_track_file(desired_name, desired_link, notification_price)
+            add_element_to_tracking_file(desired_name, desired_link, notification_price)
 
 
 def get_notification_price(name):
@@ -157,9 +158,8 @@ def get_notification_price(name):
             else:
                 return ""
         except ValueError:
-            print("Please type your answer in the form of a number. Do not include any currency symbols or "
-                  "abbreviations.\n")
-            time.sleep(2)
+            print_then_sleep("Please type your answer in the form of a number. Do not include any currency symbols or "
+                             "abbreviations.\n")
 
 
 def get_confirmation(message):
@@ -172,18 +172,25 @@ def get_confirmation(message):
         print_then_sleep("That is not a valid response.\n")
 
 
-def update_price_if_already_tracked(name, new_price, file):
+def update_file_if_already_tracked(name, link, new_price, file):
     with open(file, "r") as f:
         file_lines = f.readlines()
     for line_num, line_string in enumerate(file_lines):
-        if line_string.strip() == name:
+        if is_link(line_string.strip()) and get_offer_listing_url(line_string.strip()) == get_offer_listing_url(link):
             try:
-                val = file_lines[line_num + 2].strip()
-                if val == new_price:
+                val = file_lines[line_num + 1].strip()
+                previous_conditions = convert_link_to_conditions(line_string.strip())
+                new_conditions = convert_link_to_conditions(link)
+                if val in [str(round(new_price, 2)), str(round(new_price, 2)) + "0"] and \
+                        previous_conditions == new_conditions:
                     print_then_sleep(f"You are already tracking {name} at a maximum price value of ${val}.\n")
-                elif get_confirmation(f"You are currently tracking {name} for a maximum price value of ${val}.\n"
-                                      f"Would you like to update this maximum price value to ${new_price:.2f}?\n"):
-                    file_lines[line_num + 2] = f"{new_price:.2f}\n"
+
+                elif get_confirmation(f"You are currently tracking {name} for a maximum price value of ${val}, "
+                                      f"at these conditions: {', '.join(previous_conditions) or 'all'}.\n"
+                                      f"Would you like to update this maximum price value to ${new_price:.2f} "
+                                      f"at these conditions: {', '.join(new_conditions) or 'all'}?\n"):
+                    file_lines[line_num] = f"{link}\n"
+                    file_lines[line_num + 1] = f"{new_price:.2f}\n"
                     with open(file, "w") as f:
                         f.writelines(file_lines)
                 return True
@@ -192,10 +199,21 @@ def update_price_if_already_tracked(name, new_price, file):
     return False
 
 
-def add_element_to_track_file(name, link, price):
+def is_link(data):
+    return len(data) > 7 and data[:4] == "http" and len(data.split(" ")) == 1
+
+
+def get_offer_listing_url(link):
+    split_link = link.split("/")
+    product_code = split_link[5]
+    new_link = f"https://www.amazon.ca/gp/offer-listing/{product_code}/"
+    return new_link
+
+
+def add_element_to_tracking_file(name, link, price):
     filename = "amazon_tracked_items.txt"
     try:
-        if update_price_if_already_tracked(name, price, filename):
+        if update_file_if_already_tracked(name, link, price, filename):
             return
         raise FileNotFoundError
     except FileNotFoundError:
@@ -205,33 +223,72 @@ def add_element_to_track_file(name, link, price):
             f.write(f"{price:.2f}\n")
 
 
+def get_user_input_for_quality():
+    while True:
+        print_then_sleep("What conditions of this item are you interested in tracking?\n"
+                         "From highest to lowest quality, possible conditions are:\n"
+                         "\tNew        (n)\n"
+                         "\tLike New   (l)\n"
+                         "\tVery Good  (v)\n"
+                         "\tGood       (g)\n"
+                         "\tAcceptable (a)\n"
+                         "\tAll        (x)""")
+        response = input("Please type the key letters for all conditions you are interested in tracking.\n"
+                         "For example, if you want to track only new, like new, and very good conditions, type "
+                         "'nlv'.\n").lower()
+        if [i for i in set(response) if i in abbreviated_quality_dict]:
+            return response
+        print_then_sleep("There was an error in your input. You did not include any condition key letters.")
+
+
+def get_quality_to_track(link):
+    quality = set(get_user_input_for_quality())
+    final_link = get_link_with_quality(link, quality)
+    return final_link
+
+
+def get_link_with_quality(link, condition_set):
+    link_list = [link]
+    if "x" in condition_set or not condition_set:
+        return link
+    link_list.append("ref=?")
+    for letter in condition_set:
+        if letter in abbreviated_quality_dict:
+            link_list.append(f"f_{abbreviated_quality_dict[letter]}=true&")
+    return "".join(link_list)
+
+
+def convert_link_to_conditions(link):
+    conditions = set()
+    split_link = link.split("/")
+    if len(split_link) < 6:
+        return {"x"}
+    condition_information = split_link[-1]
+    condition_information = re.split('[\?\&]', condition_information)
+    for element in condition_information[1:]:
+        if element[2:-5] in full_quality_dict:
+            conditions.add(full_quality_dict[element[2:-5]])
+    return conditions
+
+
 if __name__ == "__main__":
     main_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:47.0) Gecko/20100101 Firefox/47.0'}
 
+    abbreviated_quality_dict = {"n": "new",
+                                "l": "usedLikeNew",
+                                "v": "usedVeryGood",
+                                "g": "usedGood",
+                                "a": "usedAcceptable",
+                                "x": "all"}
+    full_quality_dict = {"new": "new",
+                         "usedLikeNew": "like new",
+                         "usedVeryGood": "very good",
+                         "usedGood": "good",
+                         "usedAcceptable": "acceptable",
+                         "all": "all"}
+
     while True:
-        get(main_headers)
-
-        # if names:
-
-    # for num, (item, val, link) in enumerate(zip(names, prices, links)):
-    #     print(f"{num+1:>2d}. ({val}) {item if len(item) < 50 else item[:50] + '...'}")
-    # search_choice = input("Type in the number of the item you want to track, or else type 'q' to search for another "
-    #                       "item.")
-    # input()
-
-#     # url = 'https://www.amazon.ca/gp/offer-listing/B01MUAGZ49'
-#     url_1 = 'https://www.amazon.ca/gp/offer-listing/B01MUAGZ49/ref=olp_f_usedVeryGood&f_new=true&f_collectible=true&' \
-#             'f_usedLikeNew=true&f_usedVeryGood=true'
-#     url_2 = 'https://www.amazon.ca/gp/offer-listing/B01LTHP2ZK/ref=olp_f_usedVeryGood&f_new=true&f_collectible=true&' \
-#             'f_usedLikeNew=true&f_usedVeryGood=true'
-#     prices = parse_amazon(url_1, headers)
-#     prices = parse_amazon(url_2, headers)
-
-# ref=sr_nr_p_n_shipping_option-bin_1
-# olpOfferPrice
-# olpShippingPrice
-# olpCondition
-# olpSellerColumn
-#smo x2, tomotoc, botw, mk8 deluxe, joycon l/r,
-# Super Mario Party missing price
-# tomotoc missing all
+        try:
+            main(main_headers)
+        except Exception as e:
+            print(e)
